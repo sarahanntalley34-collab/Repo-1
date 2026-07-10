@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
-import { validateSession, logoutUser } from "~/lib/server-fns";
+import { validateSession, logoutUser, generateRetroReport, getDashboardReports } from "~/lib/server-fns";
+import { GitHubConnectButton } from "~/components/GitHubConnectModal";
 
 export const Route = createFileRoute("/dashboard")({
   component: DashboardPage,
@@ -26,94 +27,7 @@ interface RetroReport {
   actionItems: { title: string; owner: string; priority: "High" | "Medium" | "Low"; due: string }[];
 }
 
-// --- Mock Data ---
-
-const mockReports: RetroReport[] = [
-  {
-    id: "r1",
-    title: "Sprint #24 — Retrospective",
-    periodStart: "Apr 7",
-    periodEnd: "Apr 21, 2026",
-    team: "Frontend Platform",
-    status: "healthy",
-    cycleTime: "2.4d",
-    prThroughput: 14,
-    bugChurn: "8.3%",
-    reworkRate: "5.1%",
-    summary: "Solid sprint with strong throughput. Cycle time improved 18% thanks to smaller PRs and faster reviews.",
-    insights: [
-      { type: "positive", title: "Cycle time decreased 18%", description: "Average PR cycle time dropped from 2.9d to 2.4d." },
-      { type: "warning", title: "Bug churn increased mid-sprint", description: "A spike in bug-fix PRs on Day 8 suggests the auth refactor introduced regressions." },
-      { type: "action", title: "Add integration tests for auth flows", description: "Owner: @frontend-team • Priority: High" },
-    ],
-    actionItems: [
-      { title: "Add integration tests for auth flows", owner: "@frontend-team", priority: "High", due: "Next sprint" },
-      { title: "Reduce average PR size to <200 lines", owner: "@all", priority: "Medium", due: "Ongoing" },
-    ],
-  },
-  {
-    id: "r2",
-    title: "Sprint #23 — Retrospective",
-    periodStart: "Mar 24",
-    periodEnd: "Apr 4, 2026",
-    team: "Frontend Platform",
-    status: "needs-attention",
-    cycleTime: "2.9d",
-    prThroughput: 11,
-    bugChurn: "12.1%",
-    reworkRate: "7.3%",
-    summary: "Cycle time crept up due to larger PRs. Bug churn was elevated.",
-    insights: [
-      { type: "warning", title: "Cycle time increased 12%", description: "Average PR cycle time increased from 2.6d to 2.9d." },
-      { type: "action", title: "Break API migration into smaller PRs", description: "Owner: @backend-team • Priority: High" },
-    ],
-    actionItems: [
-      { title: "Break API migration into smaller PRs", owner: "@backend-team", priority: "High", due: "Sprint 25" },
-    ],
-  },
-  {
-    id: "r3",
-    title: "Sprint #22 — Retrospective",
-    periodStart: "Mar 10",
-    periodEnd: "Mar 21, 2026",
-    team: "Frontend Platform",
-    status: "healthy",
-    cycleTime: "2.6d",
-    prThroughput: 13,
-    bugChurn: "6.8%",
-    reworkRate: "4.2%",
-    summary: "Another strong sprint. All metrics within target range.",
-    insights: [
-      { type: "positive", title: "Rework rate at all-time low", description: "Rework rate dropped to 4.2%." },
-    ],
-    actionItems: [
-      { title: "Document the new CI pipeline best practices", owner: "@devops", priority: "Medium", due: "Sprint 24" },
-    ],
-  },
-  {
-    id: "r4",
-    title: "Sprint #21 — Retrospective",
-    periodStart: "Feb 24",
-    periodEnd: "Mar 7, 2026",
-    team: "Frontend Platform",
-    status: "critical",
-    cycleTime: "3.8d",
-    prThroughput: 8,
-    bugChurn: "15.4%",
-    reworkRate: "9.8%",
-    summary: "Challenging sprint. Major refactor PRs caused bottlenecks.",
-    insights: [
-      { type: "warning", title: "Cycle time spiked 46%", description: "Average cycle time hit 3.8d." },
-      { type: "action", title: "Reduce WIP limit to 2 PRs per developer", description: "Owner: @tech-lead • Priority: High" },
-    ],
-    actionItems: [
-      { title: "Reduce WIP limit to 2 PRs per developer", owner: "@tech-lead", priority: "High", due: "Immediately" },
-    ],
-  },
-];
-
 interface TeamInfo { name: string; repo: string; members: number; plan: string; }
-const mockTeam: TeamInfo = { name: "Frontend Platform", repo: "acme-inc/frontend-app", members: 8, plan: "Pro" };
 
 // --- SVG Icon Components ---
 
@@ -131,6 +45,7 @@ function IconGitHub({ className = "h-5 w-5" }: { className?: string }) {
 }
 function IconArrowRight() { return <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" /></svg>; }
 function IconLogOut() { return <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" /></svg>; }
+function IconSparkles() { return <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" /></svg>; }
 
 function statusColor(status: string) {
   switch (status) {
@@ -156,10 +71,14 @@ function DashboardPage() {
   const [checking, setChecking] = useState(true);
   const [view, setView] = useState<View>("overview");
   const [selectedReport, setSelectedReport] = useState<RetroReport | null>(null);
+  const [reports, setReports] = useState<RetroReport[]>([]);
+  const [teams, setTeams] = useState<{ id: string; name: string }[]>([]);
+  const [generating, setGenerating] = useState(false);
+  const [needsTeam, setNeedsTeam] = useState(false);
 
-  // Auth check on mount
+  // Auth check and data loading
   useEffect(() => {
-    const checkAuth = async () => {
+    const load = async () => {
       const token = localStorage.getItem("retroai_token");
       if (!token) {
         setChecking(false);
@@ -169,8 +88,15 @@ function DashboardPage() {
         const result = await validateSession({ data: { token } });
         if (result.user) {
           setUser(result.user);
-          // Sync stored user data
           localStorage.setItem("retroai_user", JSON.stringify(result.user));
+          // Load dashboard data
+          const dashResult = await getDashboardReports({ data: { userId: result.user.id } });
+          if (dashResult.teams.length === 0) {
+            setNeedsTeam(true);
+          } else {
+            setTeams(dashResult.teams);
+            setReports(dashResult.reports);
+          }
         } else {
           localStorage.removeItem("retroai_token");
           localStorage.removeItem("retroai_user");
@@ -181,7 +107,7 @@ function DashboardPage() {
       }
       setChecking(false);
     };
-    checkAuth();
+    load();
   }, []);
 
   const handleLogout = async () => {
@@ -194,12 +120,60 @@ function DashboardPage() {
     window.location.href = "/";
   };
 
+  const handleGenerateRetro = async () => {
+    if (!user || teams.length === 0) return;
+    setGenerating(true);
+    try {
+      // Generate a retro report with demo sprint metrics
+      // (In production, this data would come from GitHub API)
+      const result = await generateRetroReport({
+        data: {
+          userId: user.id,
+          teamId: teams[0].id,
+          metrics: {
+            teamName: teams[0].name,
+            sprintName: "Sprint #25",
+            periodStart: "May 5",
+            periodEnd: "May 19, 2026",
+            cycleTime: 2.4,
+            cycleTimeChange: -17.2,
+            prThroughput: 14,
+            prThroughputChange: 12.5,
+            bugChurnPercent: 8.3,
+            bugChurnChange: -4.1,
+            reworkRatePercent: 5.1,
+            reworkRateChange: -2.3,
+            avgPrSize: 185,
+            avgReviewTime: 3.2,
+            totalCommits: 87,
+            contributors: 6,
+            topContributors: ["alice", "bob", "charlie", "diana"],
+          },
+        },
+      });
+
+      if ("error" in result) {
+        console.error("Error generating report:", result.error);
+        return;
+      }
+
+      // Add the new report to the list
+      setReports((prev) => [result as unknown as RetroReport, ...prev]);
+      setSelectedReport(result as unknown as RetroReport);
+      setView("report-detail");
+    } catch (err) {
+      console.error("Failed to generate report:", err);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   if (checking) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-950">
         <div className="text-center">
           <div className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent mx-auto" />
-          <p className="mt-4 text-sm text-gray-400">Checking authentication...</p>
+          <p className="mt-4 text-sm text-gray-400">Loading dashboard...</p>
         </div>
       </div>
     );
@@ -243,7 +217,9 @@ function DashboardPage() {
           </button>
           <button onClick={() => { setView("reports"); setSelectedReport(null); }} className={`w-full flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${view === "reports" ? "bg-indigo-500/10 text-indigo-400" : "text-gray-400 hover:bg-gray-800/60 hover:text-gray-200"}`}>
             <IconFileText /> Retro Reports
-            <span className="ml-auto rounded-full bg-indigo-500/10 px-2 py-0.5 text-xs font-medium text-indigo-400">{mockReports.length}</span>
+            {reports.length > 0 && (
+              <span className="ml-auto rounded-full bg-indigo-500/10 px-2 py-0.5 text-xs font-medium text-indigo-400">{reports.length}</span>
+            )}
           </button>
           <button onClick={() => { setView("settings"); setSelectedReport(null); }} className={`w-full flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${view === "settings" ? "bg-indigo-500/10 text-indigo-400" : "text-gray-400 hover:bg-gray-800/60 hover:text-gray-200"}`}>
             <IconSettings /> Settings
@@ -287,10 +263,26 @@ function DashboardPage() {
       {/* Main Content */}
       <main className="flex-1 lg:pl-64">
         <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
-          {view === "overview" && !selectedReport && <OverviewView user={user} report={mockReports[0]} onViewReport={() => handleViewReport(mockReports[0])} />}
+          {view === "overview" && !selectedReport && (
+            <OverviewView
+              user={user}
+              report={reports.length > 0 ? reports[0] : null}
+              onViewReport={() => reports.length > 0 && handleViewReport(reports[0])}
+              onGenerateRetro={handleGenerateRetro}
+              generating={generating}
+              needsTeam={needsTeam}
+            />
+          )}
           {view === "report-detail" && selectedReport && <ReportDetailView report={selectedReport} onBack={handleBack} />}
-          {view === "reports" && !selectedReport && <ReportsListView reports={mockReports} onViewReport={handleViewReport} />}
-          {view === "settings" && <SettingsView user={user} team={mockTeam} />}
+          {view === "reports" && !selectedReport && (
+            <ReportsListView
+              reports={reports}
+              onViewReport={handleViewReport}
+              onGenerateRetro={handleGenerateRetro}
+              generating={generating}
+            />
+          )}
+          {view === "settings" && <SettingsView user={user} />}
         </div>
       </main>
     </div>
@@ -299,88 +291,145 @@ function DashboardPage() {
 
 // --- Sub-Views ---
 
-function OverviewView({ user, report, onViewReport }: { user: any; report: RetroReport; onViewReport: () => void }) {
+function OverviewView({ user, report, onViewReport, onGenerateRetro, generating, needsTeam }: {
+  user: any; report: RetroReport | null; onViewReport: () => void;
+  onGenerateRetro: () => void; generating: boolean; needsTeam: boolean;
+}) {
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-100 sm:text-3xl">Welcome back, {user.name || "there"}!</h1>
-        <p className="mt-2 text-gray-400">Here's your latest retro report and team overview.</p>
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {[
-          { label: "Total Reports", value: "4", change: "+2 this month" },
-          { label: "Avg. Cycle Time", value: "2.4d", change: "-18% vs last sprint" },
-          { label: "PR Throughput", value: "14/sprint", change: "+27% avg" },
-          { label: "Team Health", value: "87%", change: "+5% this quarter" },
-        ].map((stat) => (
-          <div key={stat.label} className="rounded-xl border border-gray-800/50 bg-gray-900/50 p-5">
-            <div className="text-2xl font-bold text-gray-100">{stat.value}</div>
-            <div className="text-sm text-gray-500">{stat.label}</div>
-            <div className="mt-1 text-xs font-medium text-green-400">{stat.change}</div>
-          </div>
-        ))}
-      </div>
-      <div>
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-100">Latest Retro Report</h2>
-          <button onClick={onViewReport} className="inline-flex items-center gap-1.5 text-sm font-medium text-indigo-400 hover:text-indigo-300">
-            View full report <IconArrowRight />
-          </button>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-100 sm:text-3xl">Welcome back, {user.name || "there"}!</h1>
+          <p className="mt-2 text-gray-400">Here's your latest retro report and team overview.</p>
         </div>
-        <div className="mt-4 rounded-xl border border-gray-800/50 bg-gray-900/50 p-5">
-          <div className="flex items-center gap-3 mb-4">
-            <span className="text-sm font-medium text-gray-300">{report.title}</span>
-            <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${statusColor(report.status)}`}>{statusLabel(report.status)}</span>
-          </div>
-          <div className="grid gap-4 sm:grid-cols-4">
+        <button
+          onClick={onGenerateRetro}
+          disabled={generating || needsTeam}
+          className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition-all hover:bg-indigo-500 hover:shadow-indigo-400/30 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <IconSparkles />
+          {generating ? "Generating..." : "Generate Retro Report"}
+        </button>
+      </div>
+
+      {needsTeam ? (
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-6 text-center">
+          <h3 className="text-lg font-semibold text-amber-400">No team set up yet</h3>
+          <p className="mt-2 text-sm text-amber-400/70">Connect your GitHub account and configure a team to get started.</p>
+          <Link to="/settings" className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-indigo-400 hover:text-indigo-300">
+            Go to Settings <IconArrowRight />
+          </Link>
+        </div>
+      ) : (
+        <>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {[
-              { label: "Cycle Time", value: report.cycleTime },
-              { label: "PR Throughput", value: `${report.prThroughput}/sprint` },
-              { label: "Bug Churn", value: report.bugChurn },
-              { label: "Rework Rate", value: report.reworkRate },
-            ].map((m) => (
-              <div key={m.label} className="text-center">
-                <div className="text-lg font-bold text-gray-100">{m.value}</div>
-                <div className="text-xs text-gray-500">{m.label}</div>
+              { label: "Total Reports", value: String(report ? 1 : 0), change: "Generated by AI" },
+              { label: "Avg. Cycle Time", value: report?.cycleTime || "—", change: "Latest sprint" },
+              { label: "PR Throughput", value: report ? `${report.prThroughput}/sprint` : "—", change: "Latest sprint" },
+              { label: "Team Health", value: report?.status === "healthy" ? "Good" : report?.status === "needs-attention" ? "Fair" : report?.status === "critical" ? "Needs Work" : "—", change: "Based on latest report" },
+            ].map((stat) => (
+              <div key={stat.label} className="rounded-xl border border-gray-800/50 bg-gray-900/50 p-5">
+                <div className="text-2xl font-bold text-gray-100">{stat.value}</div>
+                <div className="text-sm text-gray-500">{stat.label}</div>
+                <div className="mt-1 text-xs font-medium text-green-400">{stat.change}</div>
               </div>
             ))}
           </div>
-          <p className="mt-4 text-sm text-gray-400">{report.summary}</p>
-        </div>
-      </div>
+
+          {report && (
+            <div>
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-gray-100">Latest Retro Report</h2>
+                <button onClick={onViewReport} className="inline-flex items-center gap-1.5 text-sm font-medium text-indigo-400 hover:text-indigo-300">
+                  View full report <IconArrowRight />
+                </button>
+              </div>
+              <div className="mt-4 rounded-xl border border-gray-800/50 bg-gray-900/50 p-5">
+                <div className="flex items-center gap-3 mb-4">
+                  <span className="text-sm font-medium text-gray-300">{report.title}</span>
+                  <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${statusColor(report.status)}`}>{statusLabel(report.status)}</span>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-4">
+                  {[
+                    { label: "Cycle Time", value: report.cycleTime },
+                    { label: "PR Throughput", value: `${report.prThroughput}/sprint` },
+                    { label: "Bug Churn", value: report.bugChurn },
+                    { label: "Rework Rate", value: report.reworkRate },
+                  ].map((m) => (
+                    <div key={m.label} className="text-center">
+                      <div className="text-lg font-bold text-gray-100">{m.value}</div>
+                      <div className="text-xs text-gray-500">{m.label}</div>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-4 text-sm text-gray-400">{report.summary}</p>
+              </div>
+            </div>
+          )}
+
+          {!report && (
+            <div className="rounded-xl border border-gray-800/50 bg-gray-900/50 p-8 text-center">
+              <IconSparkles />
+              <h3 className="mt-4 text-lg font-semibold text-gray-100">No reports yet</h3>
+              <p className="mt-2 text-sm text-gray-400">Click "Generate Retro Report" to create your first AI-powered retrospective.</p>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
 
-function ReportsListView({ reports, onViewReport }: { reports: RetroReport[]; onViewReport: (r: RetroReport) => void }) {
+function ReportsListView({ reports, onViewReport, onGenerateRetro, generating }: {
+  reports: RetroReport[]; onViewReport: (r: RetroReport) => void;
+  onGenerateRetro: () => void; generating: boolean;
+}) {
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-100 sm:text-3xl">Retro Reports</h1>
-        <p className="mt-2 text-gray-400">Browse all your past sprint retrospectives.</p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-100 sm:text-3xl">Retro Reports</h1>
+          <p className="mt-2 text-gray-400">Browse all your past sprint retrospectives.</p>
+        </div>
+        <button
+          onClick={onGenerateRetro}
+          disabled={generating}
+          className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition-all hover:bg-indigo-500 hover:shadow-indigo-400/30 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <IconSparkles />
+          {generating ? "Generating..." : "Generate New"}
+        </button>
       </div>
-      <div className="space-y-4">
-        {reports.map((report) => (
-          <button key={report.id} onClick={() => onViewReport(report)}
-            className="group w-full text-left rounded-xl border border-gray-800/50 bg-gray-900/50 p-5 transition-all hover:border-gray-700/50 hover:bg-gray-800/70">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-3">
-                  <h3 className="truncate text-base font-semibold text-gray-100 group-hover:text-indigo-400">{report.title}</h3>
-                  <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${statusColor(report.status)}`}>{statusLabel(report.status)}</span>
+      {reports.length === 0 ? (
+        <div className="rounded-xl border border-gray-800/50 bg-gray-900/50 p-8 text-center">
+          <h3 className="text-lg font-semibold text-gray-100">No reports yet</h3>
+          <p className="mt-2 text-sm text-gray-400">Generate your first AI-powered retro report to get started.</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {reports.map((report) => (
+            <button key={report.id} onClick={() => onViewReport(report)}
+              className="group w-full text-left rounded-xl border border-gray-800/50 bg-gray-900/50 p-5 transition-all hover:border-gray-700/50 hover:bg-gray-800/70">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-3">
+                    <h3 className="truncate text-base font-semibold text-gray-100 group-hover:text-indigo-400">{report.title}</h3>
+                    <span className={`rounded-full border px-2 py-0.5 text-xs font-medium ${statusColor(report.status)}`}>{statusLabel(report.status)}</span>
+                  </div>
+                  <p className="mt-1 text-sm text-gray-500">{report.team} · {report.periodStart} – {report.periodEnd}</p>
                 </div>
-                <p className="mt-1 text-sm text-gray-500">{report.team} · {report.periodStart} – {report.periodEnd}</p>
+                <div className="flex items-center gap-6 text-sm">
+                  <div className="text-center"><div className="font-medium text-gray-200">{report.cycleTime}</div><div className="text-xs text-gray-500">Cycle</div></div>
+                  <div className="text-center"><div className="font-medium text-gray-200">{report.prThroughput}</div><div className="text-xs text-gray-500">PRs</div></div>
+                  <div className="text-center"><div className="font-medium text-gray-200">{report.bugChurn}</div><div className="text-xs text-gray-500">Churn</div></div>
+                  <IconArrowRight />
+                </div>
               </div>
-              <div className="flex items-center gap-6 text-sm">
-                <div className="text-center"><div className="font-medium text-gray-200">{report.cycleTime}</div><div className="text-xs text-gray-500">Cycle</div></div>
-                <div className="text-center"><div className="font-medium text-gray-200">{report.prThroughput}</div><div className="text-xs text-gray-500">PRs</div></div>
-                <div className="text-center"><div className="font-medium text-gray-200">{report.bugChurn}</div><div className="text-xs text-gray-500">Churn</div></div>
-                <IconArrowRight />
-              </div>
-            </div>
-          </button>
-        ))}
-      </div>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -447,7 +496,7 @@ function ReportDetailView({ report, onBack }: { report: RetroReport; onBack: () 
   );
 }
 
-function SettingsView({ user, team }: { user: any; team: TeamInfo }) {
+function SettingsView({ user }: { user: any }) {
   return (
     <div className="space-y-8">
       <div>
@@ -459,13 +508,13 @@ function SettingsView({ user, team }: { user: any; team: TeamInfo }) {
         <div className="mt-4 rounded-xl border border-gray-800/50 bg-gray-900/50 p-5">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-4">
-              <IconGitHub className="h-6 w-6 text-gray-400" />
-              <div><h3 className="font-medium text-gray-200">Connect GitHub</h3><p className="text-sm text-gray-500">Grant RetroAI read-only access to your repositories.</p></div>
+              <svg className="h-6 w-6 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 013.75 9.375v-4.5zM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5zM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0113.5 9.375v-4.5z" /><path strokeLinecap="round" strokeLinejoin="round" d="M13.5 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5z" /></svg>
+              <div><h3 className="font-medium text-gray-200">GitHub</h3><p className="text-sm text-gray-500">Grant RetroAI read-only access to your repositories.</p></div>
             </div>
-            <button className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition-all hover:bg-indigo-500">Connect <IconArrowRight /></button>
+            <GitHubConnectButton />
           </div>
           <div className="mt-4 rounded-lg border border-gray-800/50 bg-gray-800/30 p-3 text-sm text-gray-400">
-            ⚠️ Not connected yet. Connect your GitHub account to start generating retro reports.
+            <span className="text-amber-400">⚠️</span> Not connected yet. Click "Connect GitHub" to set up access.
           </div>
         </div>
       </div>
@@ -473,17 +522,17 @@ function SettingsView({ user, team }: { user: any; team: TeamInfo }) {
         <h2 className="text-lg font-semibold text-gray-100">Team Configuration</h2>
         <div className="mt-4 rounded-xl border border-gray-800/50 bg-gray-900/50 p-5 space-y-4">
           <div className="flex items-center justify-between">
-            <div><div className="text-sm font-medium text-gray-200">Team Name</div><div className="text-sm text-gray-500">{team.name}</div></div>
+            <div><div className="text-sm font-medium text-gray-200">Team Name</div><div className="text-sm text-gray-500">{user.name || "Your"}'s Team</div></div>
             <button className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-1.5 text-xs font-medium text-gray-300 hover:border-gray-600 hover:text-gray-100">Edit</button>
           </div>
           <div className="border-t border-gray-800/50" />
           <div className="flex items-center justify-between">
-            <div><div className="text-sm font-medium text-gray-200">Repository</div><div className="text-sm text-gray-500">{team.repo}</div></div>
-            <button className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-1.5 text-xs font-medium text-gray-300 hover:border-gray-600 hover:text-gray-100">Change</button>
+            <div><div className="text-sm font-medium text-gray-200">Repository</div><div className="text-sm text-gray-500">Not configured</div></div>
+            <button className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-1.5 text-xs font-medium text-gray-300 hover:border-gray-600 hover:text-gray-100">Configure</button>
           </div>
           <div className="border-t border-gray-800/50" />
           <div className="flex items-center justify-between">
-            <div><div className="text-sm font-medium text-gray-200">Team Members</div><div className="text-sm text-gray-500">{team.members} members</div></div>
+            <div><div className="text-sm font-medium text-gray-200">Team Members</div><div className="text-sm text-gray-500">1 member</div></div>
             <button className="rounded-lg border border-gray-700 bg-gray-800/50 px-3 py-1.5 text-xs font-medium text-gray-300 hover:border-gray-600 hover:text-gray-100">Manage</button>
           </div>
         </div>
@@ -495,12 +544,12 @@ function SettingsView({ user, team }: { user: any; team: TeamInfo }) {
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="font-medium text-gray-200">Current Plan</h3>
-                <span className="rounded-full bg-indigo-500/10 px-2.5 py-0.5 text-xs font-medium text-indigo-400">{team.plan}</span>
+                <span className="rounded-full bg-indigo-500/10 px-2.5 py-0.5 text-xs font-medium text-indigo-400">Free</span>
               </div>
-              <p className="mt-1 text-sm text-gray-500">${team.plan === "Pro" ? "49" : "0"}/month · {team.plan === "Free" ? "1 retro/month" : "Unlimited retros"}</p>
+              <p className="mt-1 text-sm text-gray-500">$0/month · 1 retro/month</p>
             </div>
             <button className="inline-flex items-center gap-2 rounded-xl border border-gray-700 bg-gray-800/50 px-5 py-2.5 text-sm font-semibold text-gray-300 hover:border-gray-600 hover:text-gray-100">
-              {team.plan === "Free" ? "Upgrade to Pro" : "Manage Subscription"} <IconArrowRight />
+              Upgrade to Pro <IconArrowRight />
             </button>
           </div>
         </div>

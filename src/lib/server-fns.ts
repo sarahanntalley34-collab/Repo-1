@@ -103,3 +103,104 @@ export const submitWaitlist = createServerFn({ method: "POST" })
     if (!ok) return { success: false, error: "This email is already on the waitlist!" };
     return { success: true };
   });
+
+// --- Retro Report Generation ---
+
+interface SprintMetricsInput {
+  teamName: string;
+  sprintName: string;
+  periodStart: string;
+  periodEnd: string;
+  cycleTime: number;
+  cycleTimeChange: number | null;
+  prThroughput: number;
+  prThroughputChange: number | null;
+  bugChurnPercent: number;
+  bugChurnChange: number | null;
+  reworkRatePercent: number;
+  reworkRateChange: number | null;
+  avgPrSize: number;
+  avgReviewTime: number;
+  totalCommits: number;
+  contributors: number;
+  topContributors: string[];
+  failureRate?: number;
+}
+
+/** Generate a retro report from sprint metrics data. */
+export const generateRetroReport = createServerFn({ method: "POST" })
+  .validator((d: { userId: string; teamId: string; metrics: SprintMetricsInput }) => d)
+  .handler(async ({ data }) => {
+    const { randomUUID } = await import("node:crypto");
+    const { initSchema, createReport, getTeamsForUser } = await import("./retroai-db");
+    const { generateRetroReport: generateReport } = await import("./llm-service");
+    await initSchema();
+
+    // Verify the user belongs to the team
+    const teams = await getTeamsForUser(data.userId);
+    const team = teams.find((t: any) => t.id === data.teamId);
+    if (!team) {
+      return { error: "Team not found or you don't have access" };
+    }
+
+    const report = await generateReport({
+      ...data.metrics,
+      teamName: team.name,
+    });
+
+    const reportId = randomUUID();
+    const insights = JSON.stringify(report.insights);
+    const actionItems = JSON.stringify(report.actionItems);
+    const metrics = JSON.stringify(report.metrics);
+
+    await createReport(
+      reportId, data.teamId, data.userId,
+      report.title, data.metrics.periodStart, data.metrics.periodEnd,
+      report.summary, insights, actionItems, metrics, report.status
+    );
+
+    return {
+      id: reportId,
+      title: report.title,
+      periodStart: data.metrics.periodStart,
+      periodEnd: data.metrics.periodEnd,
+      team: team.name,
+      status: report.status,
+      cycleTime: report.metrics.cycleTime,
+      prThroughput: report.metrics.prThroughput,
+      bugChurn: report.metrics.bugChurn,
+      reworkRate: report.metrics.reworkRate,
+      summary: report.summary,
+      insights: report.insights,
+      actionItems: report.actionItems,
+    };
+  });
+
+/** Get all reports for a team. */
+export const getDashboardReports = createServerFn({ method: "POST" })
+  .validator((d: { userId: string }) => d)
+  .handler(async ({ data }) => {
+    const { initSchema, getTeamsForUser, getReportsForTeam } = await import("./retroai-db");
+    await initSchema();
+    const teams = await getTeamsForUser(data.userId);
+    if (teams.length === 0) return { teams: [], reports: [] };
+    const reports = await getReportsForTeam(teams[0].id);
+    return {
+      teams: teams.map((t: any) => ({ id: t.id, name: t.name })),
+      reports: reports.map((r: any) => ({
+        id: r.id,
+        title: r.title,
+        periodStart: r.period_start,
+        periodEnd: r.period_end,
+        team: teams[0].name,
+        status: r.status,
+        cycleTime: JSON.parse(r.metrics || "{}").cycleTime || "—",
+        prThroughput: JSON.parse(r.metrics || "{}").prThroughput || 0,
+        bugChurn: JSON.parse(r.metrics || "{}").bugChurn || "—",
+        reworkRate: JSON.parse(r.metrics || "{}").reworkRate || "—",
+        summary: r.summary || "",
+        insights: JSON.parse(r.insights || "[]"),
+        actionItems: JSON.parse(r.action_items || "[]"),
+      })),
+    };
+  });

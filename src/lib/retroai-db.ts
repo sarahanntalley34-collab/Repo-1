@@ -124,3 +124,24 @@ export async function addWaitlistSignup(id: string, email: string): Promise<bool
     return false; // duplicate or error
   }
 }
+
+export async function createReport(
+  id: string, teamId: string, createdBy: string,
+  title: string, periodStart: string, periodEnd: string,
+  summary: string, insights: string, actionItems: string,
+  metrics: string, status: string
+) {
+  await query(
+    `INSERT INTO retros_reports (id,team_id,created_by,title,period_start,period_end,summary,insights,action_items,metrics,status) ` +
+    `VALUES (${[id,teamId,createdBy,title,periodStart,periodEnd,summary,insights,actionItems,metrics,status].map(esc).join(",")})`
+  );
+}
+
+export async function getReportById(id: string) {
+  const r = await query<any>(`SELECT * FROM retros_reports WHERE id=${esc(id)} LIMIT 1`);
+  return r[0] ?? null;
+}
+
+export async function deleteReport(id: string) {
+  await query(`DELETE FROM retros_reports WHERE id=${esc(id)}`);
+}
