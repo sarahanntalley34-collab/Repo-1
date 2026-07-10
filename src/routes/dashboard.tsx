@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState, useEffect } from "react";
-import { validateSession, logoutUser, generateRetroReport, getDashboardReports } from "~/lib/server-fns";
+import { validateSession, logoutUser, generateRetroReport, getDashboardReports, getSubscription, createCheckout, createPortal, setUserPlan, getGitHubConnection } from "~/lib/server-fns";
 import { GitHubConnectButton } from "~/components/GitHubConnectModal";
 
 export const Route = createFileRoute("/dashboard")({
@@ -75,6 +75,9 @@ function DashboardPage() {
   const [teams, setTeams] = useState<{ id: string; name: string }[]>([]);
   const [generating, setGenerating] = useState(false);
   const [needsTeam, setNeedsTeam] = useState(false);
+  const [subscription, setSubscription] = useState<{ plan: string; status: string; currentPeriodEnd: string | null; stripeCustomerId: string | null; stripeSubscriptionId: string | null } | null>(null);
+  const [portalLoading, setPortalLoading] = useState(false);
+  const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
 
   // Auth check and data loading
   useEffect(() => {
@@ -90,13 +93,17 @@ function DashboardPage() {
           setUser(result.user);
           localStorage.setItem("retroai_user", JSON.stringify(result.user));
           // Load dashboard data
-          const dashResult = await getDashboardReports({ data: { userId: result.user.id } });
+          const [dashResult, subResult] = await Promise.all([
+            getDashboardReports({ data: { userId: result.user.id } }),
+            getSubscription({ data: { userId: result.user.id } }).catch(() => null),
+          ]);
           if (dashResult.teams.length === 0) {
             setNeedsTeam(true);
           } else {
             setTeams(dashResult.teams);
             setReports(dashResult.reports);
           }
+          if (subResult) setSubscription(subResult);
         } else {
           localStorage.removeItem("retroai_token");
           localStorage.removeItem("retroai_user");
@@ -165,6 +172,48 @@ function DashboardPage() {
       console.error("Failed to generate report:", err);
     } finally {
       setGenerating(false);
+    }
+  };
+
+  // --- Stripe Billing Handlers ---
+
+  const handleUpgrade = async (planId: string) => {
+    if (!user) return;
+    setCheckoutLoading(planId);
+    try {
+      const result = await createCheckout({
+        data: { userId: user.id, email: user.email, name: user.name || "", planId },
+      });
+      if ("url" in result && result.url) {
+        window.location.href = result.url;
+      } else {
+        // In dev mode (no Stripe keys), mock the upgrade
+        const planResult = await setUserPlan({ data: { userId: user.id, plan: planId } });
+        if (planResult.ok) {
+          setSubscription(prev => prev ? { ...prev, plan: planId, status: "active" } : null);
+          setUser((prev: any) => ({ ...prev, plan: planId }));
+          alert(`Upgraded to ${planId} plan (mock mode — set STRIPE_SECRET_KEY for real billing)`);
+        }
+      }
+    } catch (err) {
+      console.error("Upgrade error:", err);
+    } finally {
+      setCheckoutLoading(null);
+    }
+  };
+
+  const handleManageSubscription = async () => {
+    if (!user) return;
+    setPortalLoading(true);
+    try {
+      const result = await createPortal({ data: { userId: user.id } });
+      if ("url" in result && result.url) {
+        window.location.href = result.url;
+      }
+    } catch (err) {
+      console.error("Portal error:", err);
+    } finally {
+      setPortalLoading(false);
     }
   };
 
@@ -282,7 +331,7 @@ function DashboardPage() {
               generating={generating}
             />
           )}
-          {view === "settings" && <SettingsView user={user} />}
+          {view === "settings" && <SettingsView user={user} subscription={subscription} onUpgrade={handleUpgrade} onManageSubscription={handleManageSubscription} portalLoading={portalLoading} checkoutLoading={checkoutLoading} />}
         </div>
       </main>
     </div>
@@ -496,7 +545,42 @@ function ReportDetailView({ report, onBack }: { report: RetroReport; onBack: () 
   );
 }
 
-function SettingsView({ user }: { user: any }) {
+function SettingsView({ user, subscription, onUpgrade, onManageSubscription, portalLoading, checkoutLoading }: {
+  user: any;
+  subscription: { plan: string; status: string; currentPeriodEnd: string | null; stripeCustomerId: string | null; stripeSubscriptionId: string | null } | null;
+  onUpgrade: (planId: string) => void;
+  onManageSubscription: () => void;
+  portalLoading: boolean;
+  checkoutLoading: string | null;
+}) {
+  const [ghConnected, setGhConnected] = useState(false);
+  const [ghUsername, setGhUsername] = useState("");
+
+  useEffect(() => {
+    const checkGh = async () => {
+      try {
+        const result = await getGitHubConnection({ data: { userId: user.id } });
+        setGhConnected(result.connected);
+        if (result.connected) {
+          const storedUser = localStorage.getItem("retroai_github_user");
+          if (storedUser) {
+            try { setGhUsername(JSON.parse(storedUser).login || ""); } catch {}
+          }
+        }
+      } catch {}
+    };
+    checkGh();
+  }, [user.id]);
+
+  const currentPlan = subscription?.plan || "free";
+  const planDisplay = currentPlan.charAt(0).toUpperCase() + currentPlan.slice(1);
+  const isPaid = currentPlan === "pro" || currentPlan === "enterprise";
+  const planPrice = currentPlan === "pro" ? "$49" : currentPlan === "enterprise" ? "$149" : "$0";
+  const planDesc = currentPlan === "free" ? "1 retro/month · public repos · 10 members"
+    : currentPlan === "pro" ? "Unlimited retros · Private repos · Slack integration"
+    : "Everything in Pro + SSO · Custom templates · Priority support";
+  const isCanceled = subscription?.status === "canceled";
+
   return (
     <div className="space-y-8">
       <div>
@@ -511,10 +595,14 @@ function SettingsView({ user }: { user: any }) {
               <svg className="h-6 w-6 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 013.75 9.375v-4.5zM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5zM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0113.5 9.375v-4.5z" /><path strokeLinecap="round" strokeLinejoin="round" d="M13.5 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5z" /></svg>
               <div><h3 className="font-medium text-gray-200">GitHub</h3><p className="text-sm text-gray-500">Grant RetroAI read-only access to your repositories.</p></div>
             </div>
-            <GitHubConnectButton />
+            <GitHubConnectButton userId={user.id} connected={ghConnected} username={ghUsername} />
           </div>
           <div className="mt-4 rounded-lg border border-gray-800/50 bg-gray-800/30 p-3 text-sm text-gray-400">
-            <span className="text-amber-400">⚠️</span> Not connected yet. Click "Connect GitHub" to set up access.
+            {ghConnected ? (
+              <span className="text-green-400">✅ Connected as @{ghUsername || "GitHub user"}</span>
+            ) : (
+              <><span className="text-amber-400">⚠️</span> Not connected yet. Click "Connect GitHub" to set up access.</>
+            )}
           </div>
         </div>
       </div>
@@ -537,6 +625,8 @@ function SettingsView({ user }: { user: any }) {
           </div>
         </div>
       </div>
+
+      {/* Current Plan */}
       <div>
         <h2 className="text-lg font-semibold text-gray-100">Billing</h2>
         <div className="mt-4 rounded-xl border border-gray-800/50 bg-gray-900/50 p-5">
@@ -544,14 +634,80 @@ function SettingsView({ user }: { user: any }) {
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="font-medium text-gray-200">Current Plan</h3>
-                <span className="rounded-full bg-indigo-500/10 px-2.5 py-0.5 text-xs font-medium text-indigo-400">Free</span>
+                <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                  isPaid ? "bg-green-500/10 text-green-400" : "bg-indigo-500/10 text-indigo-400"
+                }`}>
+                  {planDisplay}
+                  {isCanceled && <span className="ml-1 text-red-400">(Canceled)</span>}
+                </span>
               </div>
-              <p className="mt-1 text-sm text-gray-500">$0/month · 1 retro/month</p>
+              <p className="mt-1 text-sm text-gray-500">{planPrice}/month · {planDesc}</p>
+              {isPaid && subscription?.currentPeriodEnd && (
+                <p className="mt-1 text-xs text-gray-500">
+                  Current period ends: {new Date(subscription.currentPeriodEnd).toLocaleDateString()}
+                </p>
+              )}
             </div>
-            <button className="inline-flex items-center gap-2 rounded-xl border border-gray-700 bg-gray-800/50 px-5 py-2.5 text-sm font-semibold text-gray-300 hover:border-gray-600 hover:text-gray-100">
-              Upgrade to Pro <IconArrowRight />
-            </button>
+            <div className="flex gap-2">
+              {isPaid ? (
+                <button
+                  onClick={onManageSubscription}
+                  disabled={portalLoading}
+                  className="inline-flex items-center gap-2 rounded-xl border border-gray-700 bg-gray-800/50 px-5 py-2.5 text-sm font-semibold text-gray-300 hover:border-gray-600 hover:text-gray-100 disabled:opacity-50"
+                >
+                  {portalLoading ? "Loading..." : "Manage Subscription"} <IconArrowRight />
+                </button>
+              ) : (
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => onUpgrade("pro")}
+                    disabled={checkoutLoading === "pro"}
+                    className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-indigo-500/25 transition-all hover:bg-indigo-500 disabled:opacity-50"
+                  >
+                    {checkoutLoading === "pro" ? "Redirecting..." : "Upgrade to Pro"} <IconArrowRight />
+                  </button>
+                  <button
+                    onClick={() => onUpgrade("enterprise")}
+                    disabled={checkoutLoading === "enterprise"}
+                    className="inline-flex items-center gap-2 rounded-xl border border-gray-700 bg-gray-800/50 px-5 py-2.5 text-sm font-semibold text-gray-300 hover:border-gray-600 disabled:opacity-50"
+                  >
+                    {checkoutLoading === "enterprise" ? "..." : "Enterprise"}
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
+        </div>
+      </div>
+
+      {/* Plan comparison */}
+      <div>
+        <h2 className="text-lg font-semibold text-gray-100">Compare Plans</h2>
+        <div className="mt-4 grid gap-4 sm:grid-cols-3">
+          {[
+            { name: "Free", price: "$0", features: ["1 retro/month", "Public repos", "10 members", "Email support"], popular: false },
+            { name: "Pro", price: "$49", features: ["Unlimited retros", "Private repos", "Slack integration", "Multiple teams", "Priority support", "Advanced analytics"], popular: true },
+            { name: "Enterprise", price: "$149", features: ["Everything in Pro", "Custom templates", "SSO/SAML", "Dedicated manager", "Custom integrations", "99.9% SLA"], popular: false },
+          ].map((plan) => (
+            <div key={plan.name} className={`rounded-xl border p-5 ${
+              plan.popular ? "border-indigo-500/50 bg-gray-900 ring-1 ring-indigo-500/20" : "border-gray-800/50 bg-gray-900/50"
+            }`}>
+              {plan.popular && <div className="text-xs font-semibold text-indigo-400 mb-1">Most Popular</div>}
+              <h3 className="text-lg font-bold text-gray-100">{plan.name}</h3>
+              <p className="text-2xl font-bold text-gray-100 mt-2">{plan.price}<span className="text-sm font-normal text-gray-500">/mo</span></p>
+              {currentPlan === plan.name.toLowerCase() && (
+                <div className="mt-2 text-xs font-medium text-green-400">Current Plan</div>
+              )}
+              <ul className="mt-4 space-y-2">
+                {plan.features.map((f) => (
+                  <li key={f} className="flex items-center gap-2 text-sm text-gray-400">
+                    <svg className="h-3.5 w-3.5 text-green-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
+                    {f}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
         </div>
       </div>
     </div>

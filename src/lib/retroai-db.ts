@@ -70,6 +70,11 @@ const SCHEMA_SQL = [
     id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`,
+  `CREATE TABLE IF NOT EXISTS retros_oauth_states (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, state TEXT NOT NULL,
+    expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES retros_users(id)
+  )`,
 ];
 
 export async function initSchema(): Promise<void> {
@@ -144,4 +149,98 @@ export async function getReportById(id: string) {
 
 export async function deleteReport(id: string) {
   await query(`DELETE FROM retros_reports WHERE id=${esc(id)}`);
+}
+
+// --- Subscription Functions ---
+
+export async function getSubscriptionByUserId(userId: string) {
+  const r = await query<any>(`SELECT * FROM retros_subscriptions WHERE user_id=${esc(userId)} ORDER BY created_at DESC LIMIT 1`);
+  return r[0] ?? null;
+}
+
+export async function upsertSubscription(
+  id: string, userId: string, stripeCustomerId: string | null,
+  stripeSubscriptionId: string | null, plan: string, status: string,
+  currentPeriodEnd: string | null
+) {
+  // Delete any existing subscription for this user
+  await query(`DELETE FROM retros_subscriptions WHERE user_id=${esc(userId)}`);
+  const cusId = stripeCustomerId ? esc(stripeCustomerId) : "NULL";
+  const subId = stripeSubscriptionId ? esc(stripeSubscriptionId) : "NULL";
+  const periodEnd = currentPeriodEnd ? esc(currentPeriodEnd) : "NULL";
+  await query(
+    `INSERT INTO retros_subscriptions (id,user_id,stripe_customer_id,stripe_subscription_id,plan,status,current_period_end) ` +
+    `VALUES (${esc(id)},${esc(userId)},${cusId},${subId},${esc(plan)},${esc(status)},${periodEnd})`
+  );
+  // Also update the user's plan
+  await query(`UPDATE retros_users SET plan=${esc(plan)} WHERE id=${esc(userId)}`);
+}
+
+export async function handleSubscriptionEvent(
+  userId: string, stripeCustomerId: string, stripeSubscriptionId: string,
+  plan: string, status: string, currentPeriodEnd: string | null
+) {
+  const { randomUUID } = await import("node:crypto");
+  const id = randomUUID();
+  await upsertSubscription(id, userId, stripeCustomerId, stripeSubscriptionId, plan, status, currentPeriodEnd);
+}
+
+export async function updateUserPlan(userId: string, plan: string) {
+  await query(`UPDATE retros_users SET plan=${esc(plan)} WHERE id=${esc(userId)}`);
+}
+
+export async function getReportsForUser(userId: string) {
+  return await query<any>(
+    `SELECT r.* FROM retros_reports r JOIN retros_team_members tm ON r.team_id = tm.team_id WHERE tm.user_id=${esc(userId)} ORDER BY r.created_at DESC`
+  );
+}
+
+// --- GitHub OAuth Functions ---
+
+export async function getConnection(userId: string, provider: string = 'github') {
+  const r = await query<any>(
+    `SELECT * FROM retros_connections WHERE user_id=${esc(userId)} AND provider=${esc(provider)} LIMIT 1`
+  );
+  return r[0] ?? null;
+}
+
+export async function upsertConnection(
+  id: string, userId: string, provider: string, providerUserId: string | null,
+  accessToken: string | null, repos: string[]
+) {
+  // Delete any existing connection for this user + provider
+  await query(`DELETE FROM retros_connections WHERE user_id=${esc(userId)} AND provider=${esc(provider)}`);
+  const pui = providerUserId ? esc(providerUserId) : "NULL";
+  const at = accessToken ? esc(accessToken) : "NULL";
+  await query(
+    `INSERT INTO retros_connections (id,user_id,provider,provider_user_id,access_token,repos) ` +
+    `VALUES (${[id,userId,provider].map(esc).join(",")},${pui},${at},${esc(JSON.stringify(repos))})`
+  );
+}
+
+export async function deleteConnection(userId: string, provider: string = 'github') {
+  await query(`DELETE FROM retros_connections WHERE user_id=${esc(userId)} AND provider=${esc(provider)}`);
+}
+
+// --- OAuth State (CSRF protection) ---
+
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+export async function saveOAuthState(id: string, userId: string, state: string) {
+  const expiresAt = new Date(Date.now() + OAUTH_STATE_TTL_MS).toISOString();
+  await query(
+    `INSERT INTO retros_oauth_states (id,user_id,state,expires_at) VALUES (${[id,userId,state].map(esc).join(",")},${esc(expiresAt)})`
+  );
+}
+
+export async function verifyOAuthState(state: string): Promise<string | null> {
+  const r = await query<any>(
+    `SELECT user_id FROM retros_oauth_states WHERE state=${esc(state)} AND expires_at > datetime('now') LIMIT 1`
+  );
+  if (r[0]) {
+    // Consume it (delete) to prevent replay
+    await query(`DELETE FROM retros_oauth_states WHERE state=${esc(state)}`);
+    return r[0].user_id;
+  }
+  return null;
 }

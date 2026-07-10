@@ -1,30 +1,135 @@
 /**
  * GitHubConnectModal — A reusable modal component for the GitHub OAuth flow.
- * Shows connection status, connect button, and optional repo list.
+ * Uses real server functions for connection management and repo access.
  * Designed to match the RetroAI dark-mode brand.
  */
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
+import {
+  getGitHubAuthUrl,
+  getGitHubConnection,
+  disconnectGitHub,
+  fetchGitHubRepos,
+  saveSelectedRepos,
+} from "~/lib/server-fns";
+
+interface GitHubRepo {
+  name: string;
+  private: boolean;
+  description?: string;
+  selected?: boolean;
+}
 
 interface GitHubConnectModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onConnect: () => void;
-  connected: boolean;
-  connectedUsername?: string;
-  repos?: { name: string; private: boolean; selected: boolean }[];
-  onToggleRepo?: (name: string) => void;
+  userId: string;
+  onStatusChange?: (connected: boolean, username?: string) => void;
 }
 
 export default function GitHubConnectModal({
   isOpen,
   onClose,
-  onConnect,
-  connected,
-  connectedUsername,
-  repos = [],
-  onToggleRepo,
+  userId,
+  onStatusChange,
 }: GitHubConnectModalProps) {
+  const [loading, setLoading] = useState(true);
+  const [connected, setConnected] = useState(false);
+  const [githubLogin, setGitHubLogin] = useState("");
+  const [repos, setRepos] = useState<GitHubRepo[]>([]);
+  const [syncing, setSyncing] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+
+  // Load connection state
+  const loadConnection = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await getGitHubConnection({ data: { userId } });
+      if (result.connected && result.repos) {
+        setConnected(true);
+        // Try to get the login name from stored data or localStorage
+        const storedUser = localStorage.getItem("retroai_github_user");
+        if (storedUser) {
+          try {
+            const ghUser = JSON.parse(storedUser);
+            setGitHubLogin(ghUser.login);
+          } catch {}
+        }
+        setRepos(result.repos.map((r: any) => ({ ...r, selected: r.selected ?? false })));
+      } else {
+        setConnected(false);
+        setRepos([]);
+      }
+    } catch {
+      setConnected(false);
+    }
+    setLoading(false);
+  }, [userId]);
+
+  useEffect(() => {
+    if (isOpen) loadConnection();
+  }, [isOpen, loadConnection]);
+
+  const handleConnect = async () => {
+    try {
+      const result = await getGitHubAuthUrl({ data: { userId } });
+      if (result.url) {
+        // Store the current page so we can return after OAuth
+        localStorage.setItem("retroai_oauth_return", window.location.pathname);
+        // Redirect to GitHub authorization
+        window.location.href = result.url;
+      }
+    } catch (err) {
+      console.error("Failed to get GitHub auth URL:", err);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    setDisconnecting(true);
+    try {
+      await disconnectGitHub({ data: { userId } });
+      setConnected(false);
+      setRepos([]);
+      setGitHubLogin("");
+      localStorage.removeItem("retroai_github_user");
+      localStorage.removeItem("retroai_github_connected");
+      onStatusChange?.(false);
+    } catch (err) {
+      console.error("Failed to disconnect GitHub:", err);
+    }
+    setDisconnecting(false);
+  };
+
+  const handleRefreshRepos = async () => {
+    setSyncing(true);
+    try {
+      const result = await fetchGitHubRepos({ data: { userId } });
+      if (result.repos) {
+        setRepos(result.repos.map((r: any) => ({ ...r, selected: false })));
+      }
+    } catch (err) {
+      console.error("Failed to fetch repos:", err);
+    }
+    setSyncing(false);
+  };
+
+  const handleToggleRepo = (name: string) => {
+    setRepos((prev) =>
+      prev.map((r) => (r.name === name ? { ...r, selected: !r.selected } : r))
+    );
+  };
+
+  const handleSaveSelection = async () => {
+    const selectedRepos = repos.filter((r) => r.selected).map((r) => r.name);
+    try {
+      await saveSelectedRepos({ data: { userId, selectedRepos } });
+      onStatusChange?.(true, githubLogin);
+      onClose();
+    } catch (err) {
+      console.error("Failed to save repo selection:", err);
+    }
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -44,45 +149,61 @@ export default function GitHubConnectModal({
         {/* Header */}
         <div className="text-center">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-xl bg-gray-800">
-            <svg className="h-7 w-7 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 013.75 9.375v-4.5zM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5zM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0113.5 9.375v-4.5z" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5z" />
+            <svg className="h-7 w-7 text-gray-300" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
             </svg>
           </div>
           <h2 className="mt-4 text-xl font-bold text-gray-100">Connect GitHub</h2>
           <p className="mt-2 text-sm text-gray-400">
-            {connected
-              ? `Connected as @${connectedUsername}`
-              : "Grant RetroAI read-only access to your repositories."}
+            {loading
+              ? "Checking connection..."
+              : connected
+                ? `Connected as @${githubLogin || "GitHub user"}`
+                : "Grant RetroAI read-only access to your repositories."}
           </p>
         </div>
 
-        {connected ? (
+        {loading ? (
+          <div className="mt-8 flex items-center justify-center py-8">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
+          </div>
+        ) : connected ? (
           /* Connected state */
           <div className="mt-6 space-y-4">
             <div className="rounded-xl border border-green-500/20 bg-green-500/5 p-4">
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-full bg-green-500/10">
-                  <svg className="h-5 w-5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" /></svg>
+                  <svg className="h-5 w-5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                  </svg>
                 </div>
                 <div>
                   <p className="font-medium text-green-400">Connected</p>
-                  <p className="text-sm text-green-400/70">@{connectedUsername}</p>
+                  <p className="text-sm text-green-400/70">@{githubLogin || "GitHub user"}</p>
                 </div>
               </div>
             </div>
 
             {/* Repo list */}
-            {repos.length > 0 && (
+            {repos.length > 0 ? (
               <div>
-                <h3 className="text-sm font-medium text-gray-200 mb-3">Select repositories to analyze</h3>
-                <div className="space-y-2 max-h-48 overflow-y-auto">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-medium text-gray-200">Select repositories to analyze</h3>
+                  <button
+                    onClick={handleRefreshRepos}
+                    disabled={syncing}
+                    className="text-xs font-medium text-indigo-400 hover:text-indigo-300 disabled:text-gray-600"
+                  >
+                    {syncing ? "Syncing..." : "Refresh"}
+                  </button>
+                </div>
+                <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
                   {repos.map((repo) => (
                     <label key={repo.name} className="flex items-center gap-3 rounded-lg border border-gray-800/50 bg-gray-900/50 p-3 cursor-pointer transition-colors hover:border-gray-700/50">
                       <input
                         type="checkbox"
-                        checked={repo.selected}
-                        onChange={() => onToggleRepo?.(repo.name)}
+                        checked={repo.selected ?? false}
+                        onChange={() => handleToggleRepo(repo.name)}
                         className="h-4 w-4 rounded border-gray-700 bg-gray-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-gray-950"
                       />
                       <div className="flex-1 min-w-0">
@@ -97,14 +218,25 @@ export default function GitHubConnectModal({
                   ))}
                 </div>
               </div>
+            ) : (
+              <div className="rounded-xl border border-gray-800/50 bg-gray-900/50 p-4 text-center text-sm text-gray-500">
+                No repositories found.
+                <button onClick={handleRefreshRepos} className="ml-2 text-indigo-400 hover:text-indigo-300">
+                  Refresh
+                </button>
+              </div>
             )}
 
             <div className="flex gap-3 pt-2">
-              <button onClick={onClose} className="flex-1 rounded-xl border border-gray-700 bg-gray-800/50 px-4 py-2.5 text-sm font-medium text-gray-300 transition-colors hover:border-gray-600 hover:text-gray-100">
-                Done
+              <button onClick={handleSaveSelection} className="flex-1 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-all hover:bg-indigo-500">
+                Save Selection
               </button>
-              <button onClick={onConnect} className="flex-1 rounded-xl bg-red-600/10 px-4 py-2.5 text-sm font-medium text-red-400 transition-colors hover:bg-red-600/20">
-                Disconnect
+              <button
+                onClick={handleDisconnect}
+                disabled={disconnecting}
+                className="flex-1 rounded-xl bg-red-600/10 px-4 py-2.5 text-sm font-medium text-red-400 transition-colors hover:bg-red-600/20 disabled:opacity-50"
+              >
+                {disconnecting ? "Disconnecting..." : "Disconnect"}
               </button>
             </div>
           </div>
@@ -130,7 +262,7 @@ export default function GitHubConnectModal({
               We never modify your code or access private data without permission.
             </p>
 
-            <button onClick={onConnect} className="flex w-full items-center justify-center gap-3 rounded-xl bg-gray-800 px-6 py-3.5 text-sm font-semibold text-gray-100 transition-all hover:bg-gray-700 border border-gray-700">
+            <button onClick={handleConnect} className="flex w-full items-center justify-center gap-3 rounded-xl bg-gray-800 px-6 py-3.5 text-sm font-semibold text-gray-100 transition-all hover:bg-gray-700 border border-gray-700">
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
               </svg>
@@ -151,35 +283,49 @@ export default function GitHubConnectModal({
 
 /**
  * GitHubConnectButton — A small inline button that opens the connect modal.
- * Use this in the dashboard settings page.
+ * Use this in the dashboard settings page. Loads real connection state.
  */
-export function GitHubConnectButton({ connected, username }: { connected: boolean; username?: string }) {
+export function GitHubConnectButton({ userId, connected: initialConnected, username }: {
+  userId: string;
+  connected: boolean;
+  username?: string;
+}) {
   const [modalOpen, setModalOpen] = useState(false);
-  const [mockConnected, setMockConnected] = useState(connected);
-  const [mockUsername, setMockUsername] = useState(username || "octocat");
-  const [mockRepos, setMockRepos] = useState([
-    { name: "acme-inc/frontend-app", private: true, selected: true },
-    { name: "acme-inc/api-service", private: true, selected: false },
-    { name: "acme-inc/docs", private: false, selected: true },
-    { name: "personal-blog", private: false, selected: false },
-  ]);
+  const [isConnected, setIsConnected] = useState(initialConnected);
+  const [ghUsername, setGhUsername] = useState(username || "");
 
-  const handleConnect = () => {
-    // In production, this would redirect to GitHub OAuth
-    // For now, toggle mock state
-    if (mockConnected) {
-      setMockConnected(false);
-      setMockUsername("");
-    } else {
-      setMockConnected(true);
-      setMockUsername("octocat");
-    }
-  };
+  // Check real connection status on mount and when localStorage changes
+  useEffect(() => {
+    const checkConnection = async () => {
+      try {
+        const result = await getGitHubConnection({ data: { userId } });
+        setIsConnected(result.connected);
+        if (result.connected) {
+          const storedUser = localStorage.getItem("retroai_github_user");
+          if (storedUser) {
+            try {
+              const ghUser = JSON.parse(storedUser);
+              setGhUsername(ghUser.login || "");
+            } catch {}
+          }
+        }
+      } catch {}
+    };
+    checkConnection();
 
-  const handleToggleRepo = (name: string) => {
-    setMockRepos((prev) =>
-      prev.map((r) => (r.name === name ? { ...r, selected: !r.selected } : r))
-    );
+    // Listen for OAuth callback completion
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === "retroai_github_connected" || e.key === "retroai_github_user") {
+        checkConnection();
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, [userId]);
+
+  // Also re-check when the modal closes (user might have connected in another tab)
+  const handleModalClose = () => {
+    setModalOpen(false);
   };
 
   return (
@@ -191,17 +337,17 @@ export function GitHubConnectButton({ connected, username }: { connected: boolea
         <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
           <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
         </svg>
-        {mockConnected ? "Connected" : "Connect GitHub"}
+        {isConnected ? `Connected${ghUsername ? ` (${ghUsername})` : ""}` : "Connect GitHub"}
       </button>
 
       <GitHubConnectModal
         isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
-        onConnect={handleConnect}
-        connected={mockConnected}
-        connectedUsername={mockUsername}
-        repos={mockRepos}
-        onToggleRepo={handleToggleRepo}
+        onClose={handleModalClose}
+        userId={userId}
+        onStatusChange={(connected, username) => {
+          setIsConnected(connected);
+          if (username) setGhUsername(username);
+        }}
       />
     </>
   );

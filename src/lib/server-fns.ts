@@ -204,3 +204,231 @@ export const getDashboardReports = createServerFn({ method: "POST" })
       })),
     };
   });
+
+// --- Stripe Billing ---
+
+/** Get the current subscription and plan info for a user. */
+export const getSubscription = createServerFn({ method: "POST" })
+  .validator((d: { userId: string }) => d)
+  .handler(async ({ data }) => {
+    const { getUserSubscription } = await import("./stripe-service");
+    return await getUserSubscription(data.userId);
+  });
+
+/** Create a Stripe Checkout session for upgrading to a paid plan. */
+export const createCheckout = createServerFn({ method: "POST" })
+  .validator((d: { userId: string; email: string; name: string; planId: string }) => d)
+  .handler(async ({ data }) => {
+    const { createCheckoutSession } = await import("./stripe-service");
+    const origin = process.env.PUBLIC_URL || "https://retroai.ctonew.app";
+    return await createCheckoutSession({
+      userId: data.userId,
+      email: data.email,
+      name: data.name,
+      planId: data.planId,
+      successUrl: `${origin}/dashboard?checkout=success&plan=${data.planId}`,
+      cancelUrl: `${origin}/dashboard?checkout=canceled`,
+    });
+  });
+
+/** Create a Stripe Billing Portal session. */
+export const createPortal = createServerFn({ method: "POST" })
+  .validator((d: { userId: string }) => d)
+  .handler(async ({ data }) => {
+    const { createBillingPortalSession } = await import("./stripe-service");
+    const origin = process.env.PUBLIC_URL || "https://retroai.ctonew.app";
+    return await createBillingPortalSession({
+      userId: data.userId,
+      returnUrl: `${origin}/dashboard`,
+    });
+  });
+
+/** Handle Stripe webhook events. */
+export const stripeWebhook = createServerFn({ method: "POST" })
+  .handler(async ({ request }) => {
+    const rawBody = await request.text();
+    const signature = request.headers.get("stripe-signature") || "";
+    const { handleWebhook } = await import("./stripe-service");
+    return await handleWebhook(rawBody, signature);
+  });
+
+/** Check if user can generate a retro report (rate limit for free plan). */
+export const checkReportLimit = createServerFn({ method: "POST" })
+  .validator((d: { userId: string }) => d)
+  .handler(async ({ data }) => {
+    const { canGenerateReport } = await import("./stripe-service");
+    return await canGenerateReport(data.userId);
+  });
+
+/** Manually set a user's plan (for testing/admin). */
+export const setUserPlan = createServerFn({ method: "POST" })
+  .validator((d: { userId: string; plan: string }) => d)
+  .handler(async ({ data }) => {
+    const { initSchema, updateUserPlan, upsertSubscription } = await import("./retroai-db");
+    const { randomUUID } = await import("node:crypto");
+    await initSchema();
+    await updateUserPlan(data.userId, data.plan);
+    await upsertSubscription(randomUUID(), data.userId, null, null, data.plan, "active", null);
+    return { ok: true, plan: data.plan };
+  });
+
+// --- GitHub OAuth ---
+
+/** Get the GitHub OAuth authorization URL for the given user. */
+export const getGitHubAuthUrl = createServerFn({ method: "POST" })
+  .validator((d: { userId: string }) => d)
+  .handler(async ({ data }) => {
+    const { randomUUID } = await import("node:crypto");
+    const { initSchema, saveOAuthState } = await import("./retroai-db");
+    const { getAuthorizationUrl } = await import("./github-service");
+    await initSchema();
+
+    const state = randomUUID();
+    const stateId = randomUUID();
+    await saveOAuthState(stateId, data.userId, state);
+
+    const url = getAuthorizationUrl(state);
+    return { url };
+  });
+
+/** Handle GitHub OAuth callback — exchange code for token, store connection. */
+export const handleGitHubCallback = createServerFn({ method: "POST" })
+  .validator((d: { code: string; state: string; userId: string }) => d)
+  .handler(async ({ data }) => {
+    const { randomUUID } = await import("node:crypto");
+    const { initSchema, verifyOAuthState, upsertConnection } = await import("./retroai-db");
+    const { exchangeCodeForToken, getGitHubUser, getUserRepos } = await import("./github-service");
+    await initSchema();
+
+    // Verify CSRF state
+    const storedUserId = await verifyOAuthState(data.state);
+    if (!storedUserId || storedUserId !== data.userId) {
+      return { error: "Invalid or expired OAuth state. Please try again." };
+    }
+
+    // Exchange code for access token
+    const tokenResult = await exchangeCodeForToken(data.code);
+    if (!tokenResult.access_token) {
+      return { error: tokenResult.error || "Failed to get GitHub access token" };
+    }
+
+    // Fetch GitHub user info
+    const githubUser = await getGitHubUser(tokenResult.access_token);
+    if (!githubUser) {
+      return { error: "Failed to fetch GitHub user info" };
+    }
+
+    // Fetch repos
+    const repos = await getUserRepos(tokenResult.access_token);
+    const repoList = repos.map((r) => ({
+      name: r.full_name,
+      private: r.private,
+      description: r.description,
+    }));
+
+    // Store connection
+    const connectionId = randomUUID();
+    await upsertConnection(
+      connectionId,
+      data.userId,
+      "github",
+      String(githubUser.id),
+      tokenResult.access_token,
+      repoList
+    );
+
+    return {
+      success: true,
+      githubUser: {
+        id: githubUser.id,
+        login: githubUser.login,
+        avatar_url: githubUser.avatar_url,
+        name: githubUser.name,
+      },
+      repos: repoList,
+    };
+  });
+
+/** Get the current GitHub connection status for a user. */
+export const getGitHubConnection = createServerFn({ method: "POST" })
+  .validator((d: { userId: string }) => d)
+  .handler(async ({ data }) => {
+    const { initSchema, getConnection } = await import("./retroai-db");
+    await initSchema();
+
+    const conn = await getConnection(data.userId, "github");
+    if (!conn) {
+      return { connected: false };
+    }
+
+    return {
+      connected: true,
+      providerUserId: conn.provider_user_id,
+      repos: JSON.parse(conn.repos || "[]"),
+    };
+  });
+
+/** Disconnect GitHub. */
+export const disconnectGitHub = createServerFn({ method: "POST" })
+  .validator((d: { userId: string }) => d)
+  .handler(async ({ data }) => {
+    const { initSchema, deleteConnection } = await import("./retroai-db");
+    await initSchema();
+    await deleteConnection(data.userId, "github");
+    return { success: true };
+  });
+
+/** Fetch repositories from the user's GitHub connection. */
+export const fetchGitHubRepos = createServerFn({ method: "POST" })
+  .validator((d: { userId: string }) => d)
+  .handler(async ({ data }) => {
+    const { initSchema, getConnection } = await import("./retroai-db");
+    const { getUserRepos } = await import("./github-service");
+    await initSchema();
+
+    const conn = await getConnection(data.userId, "github");
+    if (!conn || !conn.access_token) {
+      return { repos: [] };
+    }
+
+    const repos = await getUserRepos(conn.access_token);
+    const repoList = repos.map((r) => ({
+      name: r.full_name,
+      private: r.private,
+      description: r.description,
+    }));
+
+    // Update stored repos
+    const { upsertConnection } = await import("./retroai-db");
+    const { randomUUID } = await import("node:crypto");
+    await upsertConnection(conn.id, data.userId, "github", conn.provider_user_id, conn.access_token, repoList);
+
+    return { repos: repoList };
+  });
+
+/** Save selected repos for a user's GitHub connection. */
+export const saveSelectedRepos = createServerFn({ method: "POST" })
+  .validator((d: { userId: string; selectedRepos: string[] }) => d)
+  .handler(async ({ data }) => {
+    const { initSchema, getConnection } = await import("./retroai-db");
+    await initSchema();
+
+    const conn = await getConnection(data.userId, "github");
+    if (!conn) {
+      return { error: "No GitHub connection found" };
+    }
+
+    // Store selected repo names only (the full repo list stays as-is)
+    // We just save the selection to a separate place or update the connection
+    const allRepos = JSON.parse(conn.repos || "[]");
+    const updatedRepos = allRepos.map((r: any) => ({
+      ...r,
+      selected: data.selectedRepos.includes(r.name),
+    }));
+
+    const { upsertConnection } = await import("./retroai-db");
+    const { randomUUID } = await import("node:crypto");
+    await upsertConnection(conn.id, data.userId, "github", conn.provider_user_id, conn.access_token, updatedRepos);
+
+    return { success: true };
+  });
