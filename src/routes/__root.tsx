@@ -13,22 +13,23 @@ export const Route = createRootRoute({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "RetroAI — Automated Sprint Retrospectives" },
-      { name: "description", content: "RetroAI automatically analyzes your team's sprint data and generates data-driven retrospective reports — so engineering teams improve faster without wasting an hour in a meeting." },
-      { name: "og:title", content: "RetroAI — Automated Sprint Retrospectives" },
-      { name: "og:description", content: "Data-driven sprint retrospectives, generated automatically from your GitHub data." },
-      { name: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:title", content: "RetroAI — Automated Sprint Retrospectives" },
+      { title: "RetroAI — AI-Powered Sprint Retrospectives" },
+      {
+        name: "description",
+        content:
+          "RetroAI automatically analyzes your team's sprint data and generates data-driven retrospective reports with actionable insights.",
+      },
     ],
-    links: [
-      { rel: "stylesheet", href: appCss },
-      { rel: "icon", type: "image/png", href: "/logo.png" },
-      { rel: "preconnect", href: "https://fonts.googleapis.com" },
-      { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
-    ],
+    links: [{ rel: "stylesheet", href: appCss }],
   }),
-  notFoundComponent: () => <div>Page not found</div>,
+  notFoundComponent: () => (
+    <div className="flex min-h-dvh items-center justify-center">
+      <div className="text-center">
+        <h1 className="text-4xl font-bold">404</h1>
+        <p className="mt-2 text-gray-600 dark:text-gray-400">Page not found</p>
+      </div>
+    </div>
+  ),
   component: RootComponent,
 });
 
@@ -42,11 +43,11 @@ function RootComponent() {
 
 function RootDocument({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en">
       <head>
         <HeadContent />
       </head>
-      <body className="min-h-screen bg-gray-950 text-gray-100 antialiased">
+      <body>
         {children}
         <Scripts />
       </body>

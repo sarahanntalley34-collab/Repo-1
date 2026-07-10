@@ -16,6 +16,10 @@
   ::selection {
     @apply bg-indigo-500/30 text-white;
   }
+
+  input, button, select, textarea {
+    @apply focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 focus:ring-offset-gray-950;
+  }
 }
 
 @layer utilities {
@@ -30,10 +34,6 @@
     background: radial-gradient(ellipse 80% 50% at 50% -20%, rgba(99, 102, 241, 0.15), transparent);
   }
 
-  .bg-glow-card {
-    background: radial-gradient(ellipse 100% 100% at 50% 0%, rgba(99, 102, 241, 0.08), transparent 70%);
-  }
-
   .glass {
     @apply backdrop-blur-xl bg-gray-900/70 border border-gray-800/50;
   }
@@ -41,20 +41,34 @@
   .glass-hover {
     @apply hover:bg-gray-800/70 hover:border-gray-700/50 transition-all duration-300;
   }
-}
 
-@keyframes float {
-  0%, 100% { transform: translateY(0px); }
-  50% { transform: translateY(-8px); }
-}
+  .sidebar-item {
+    @apply flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-gray-400 transition-all hover:bg-gray-800/60 hover:text-gray-200;
+  }
 
-@keyframes pulse-glow {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 1; }
+  .sidebar-item-active {
+    @apply flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium bg-indigo-500/10 text-indigo-400;
+  }
+
+  .stat-card {
+    @apply rounded-xl border border-gray-800/50 bg-gray-900/60 p-5 backdrop-blur-sm;
+  }
+
+  .metric-up {
+    @apply text-xs font-medium text-green-400;
+  }
+
+  .metric-down {
+    @apply text-xs font-medium text-red-400;
+  }
+
+  .insight-card {
+    @apply flex items-start gap-3 rounded-lg border border-gray-800/50 bg-gray-800/30 p-4;
+  }
 }
 
 @keyframes fade-in {
-  from { opacity: 0; transform: translateY(12px); }
+  from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
@@ -63,27 +77,19 @@
   to { opacity: 1; transform: translateX(0); }
 }
 
-.animate-float {
-  animation: float 6s ease-in-out infinite;
-}
-
-.animate-pulse-glow {
-  animation: pulse-glow 3s ease-in-out infinite;
-}
-
 .animate-fade-in {
-  animation: fade-in 0.6s ease-out forwards;
+  animation: fade-in 0.4s ease-out forwards;
 }
 
 .animate-slide-in {
-  animation: slide-in 0.4s ease-out forwards;
+  animation: slide-in 0.3s ease-out forwards;
 }
 
-.stagger-1 { animation-delay: 0.1s; }
-.stagger-2 { animation-delay: 0.2s; }
-.stagger-3 { animation-delay: 0.3s; }
-.stagger-4 { animation-delay: 0.4s; }
-.stagger-5 { animation-delay: 0.5s; }
+.stagger-1 { animation-delay: 0.05s; }
+.stagger-2 { animation-delay: 0.1s; }
+.stagger-3 { animation-delay: 0.15s; }
+.stagger-4 { animation-delay: 0.2s; }
+.stagger-5 { animation-delay: 0.25s; }
 
 /* Custom scrollbar */
 ::-webkit-scrollbar {
