@@ -66,6 +66,10 @@ const SCHEMA_SQL = [
     expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (user_id) REFERENCES retros_users(id)
   )`,
+  `CREATE TABLE IF NOT EXISTS retros_waitlist (
+    id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
 ];
 
 export async function initSchema(): Promise<void> {
@@ -83,8 +87,19 @@ export async function getUserByEmail(email: string) {
   const r = await query<any>(`SELECT * FROM retros_users WHERE email=${esc(email)} LIMIT 1`);
   return r[0] ?? null;
 }
+export async function getUserById(id: string) {
+  const r = await query<any>(`SELECT * FROM retros_users WHERE id=${esc(id)} LIMIT 1`);
+  return r[0] ?? null;
+}
 export async function createSession(id: string, userId: string, token: string, expiresAt: string) {
   await query(`INSERT INTO retros_sessions (id,user_id,token,expires_at) VALUES (${[id,userId,token,expiresAt].map(esc).join(",")})`);
+}
+export async function getSessionByToken(token: string) {
+  const r = await query<any>(`SELECT * FROM retros_sessions WHERE token=${esc(token)} AND expires_at > datetime('now') LIMIT 1`);
+  return r[0] ?? null;
+}
+export async function deleteSession(token: string) {
+  await query(`DELETE FROM retros_sessions WHERE token=${esc(token)}`);
 }
 export async function createTeam(id: string, name: string, ownerId: string) {
   await query(`INSERT INTO retros_teams (id,name,owner_id) VALUES (${[id,name,ownerId].map(esc).join(",")})`);
@@ -100,4 +115,12 @@ export async function saveConnection(id: string, userId: string, provider: strin
   const pui = providerUserId ? esc(providerUserId) : "NULL";
   const at = accessToken ? esc(accessToken) : "NULL";
   await query(`INSERT INTO retros_connections (id,user_id,provider,provider_user_id,access_token,repos) VALUES (${[id,userId,provider].map(esc).join(",")},${pui},${at},${esc(JSON.stringify(repos))})`);
+}
+export async function addWaitlistSignup(id: string, email: string): Promise<boolean> {
+  try {
+    await query(`INSERT INTO retros_waitlist (id,email) VALUES (${esc(id)},${esc(email)})`);
+    return true;
+  } catch {
+    return false; // duplicate or error
+  }
 }
