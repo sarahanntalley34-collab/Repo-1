@@ -75,6 +75,24 @@ const SCHEMA_SQL = [
     expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (user_id) REFERENCES retros_users(id)
   )`,
+  `CREATE TABLE IF NOT EXISTS retros_sprints (
+    id TEXT PRIMARY KEY, team_id TEXT NOT NULL, repo_owner TEXT NOT NULL,
+    repo_name TEXT NOT NULL, sprint_name TEXT NOT NULL,
+    period_start TEXT NOT NULL, period_end TEXT NOT NULL,
+    cycle_time REAL NOT NULL DEFAULT 0, cycle_time_change REAL,
+    pr_throughput INTEGER NOT NULL DEFAULT 0, pr_throughput_change REAL,
+    bug_churn_pct REAL NOT NULL DEFAULT 0, bug_churn_change REAL,
+    rework_rate_pct REAL NOT NULL DEFAULT 0, rework_rate_change REAL,
+    avg_pr_size INTEGER NOT NULL DEFAULT 0,
+    avg_review_time REAL NOT NULL DEFAULT 0,
+    total_commits INTEGER NOT NULL DEFAULT 0,
+    contributors INTEGER NOT NULL DEFAULT 0,
+    top_contributors TEXT DEFAULT '[]',
+    prs_by_day TEXT DEFAULT '[]',
+    report_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (team_id) REFERENCES retros_teams(id)
+  )`,
 ];
 
 export async function initSchema(): Promise<void> {
@@ -192,6 +210,58 @@ export async function updateUserPlan(userId: string, plan: string) {
 export async function getReportsForUser(userId: string) {
   return await query<any>(
     `SELECT r.* FROM retros_reports r JOIN retros_team_members tm ON r.team_id = tm.team_id WHERE tm.user_id=${esc(userId)} ORDER BY r.created_at DESC`
+  );
+}
+
+// --- Sprint Analysis Storage ---
+
+export async function saveSprintAnalysis(
+  id: string, teamId: string, repoOwner: string, repoName: string,
+  sprintName: string, periodStart: string, periodEnd: string,
+  metrics: { cycleTime: number; cycleTimeChange: number | null; prThroughput: number; prThroughputChange: number | null; bugChurnPercent: number; bugChurnChange: number | null; reworkRatePercent: number; reworkRateChange: number | null; avgPrSize: number; avgReviewTime: number; totalCommits: number; contributors: number; topContributors: string[]; prsByDay: { day: string; count: number }[] },
+  reportId: string | null
+) {
+  const cols = ["id", "team_id", "repo_owner", "repo_name", "sprint_name", "period_start", "period_end",
+    "cycle_time", "cycle_time_change", "pr_throughput", "pr_throughput_change",
+    "bug_churn_pct", "bug_churn_change", "rework_rate_pct", "rework_rate_change",
+    "avg_pr_size", "avg_review_time", "total_commits", "contributors",
+    "top_contributors", "prs_by_day", "report_id"];
+
+  const vals = [
+    esc(id), esc(teamId), esc(repoOwner), esc(repoName),
+    esc(sprintName), esc(periodStart), esc(periodEnd),
+    String(metrics.cycleTime),
+    metrics.cycleTimeChange !== null ? String(metrics.cycleTimeChange) : "NULL",
+    String(metrics.prThroughput),
+    metrics.prThroughputChange !== null ? String(metrics.prThroughputChange) : "NULL",
+    String(metrics.bugChurnPercent),
+    metrics.bugChurnChange !== null ? String(metrics.bugChurnChange) : "NULL",
+    String(metrics.reworkRatePercent),
+    metrics.reworkRateChange !== null ? String(metrics.reworkRateChange) : "NULL",
+    String(metrics.avgPrSize),
+    String(metrics.avgReviewTime),
+    String(metrics.totalCommits),
+    String(metrics.contributors),
+    esc(JSON.stringify(metrics.topContributors)),
+    esc(JSON.stringify(metrics.prsByDay)),
+    reportId ? esc(reportId) : "NULL",
+  ];
+
+  await query(
+    `INSERT INTO retros_sprints (${cols.join(",")}) VALUES (${vals.join(",")})`
+  );
+}
+
+export async function getLatestSprint(teamId: string) {
+  const r = await query<any>(
+    `SELECT * FROM retros_sprints WHERE team_id=${esc(teamId)} ORDER BY created_at DESC LIMIT 1`
+  );
+  return r[0] ?? null;
+}
+
+export async function getSprintHistory(teamId: string) {
+  return await query<any>(
+    `SELECT * FROM retros_sprints WHERE team_id=${esc(teamId)} ORDER BY created_at DESC LIMIT 10`
   );
 }
 

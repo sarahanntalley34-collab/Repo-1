@@ -432,3 +432,114 @@ export const saveSelectedRepos = createServerFn({ method: "POST" })
 
     return { success: true };
   });
+
+// --- Sprint Analysis ---
+
+/** Run a sprint analysis on a GitHub repo and optionally generate a report. */
+export const runSprintAnalysis = createServerFn({ method: "POST" })
+  .validator((d: {
+    userId: string;
+    teamId: string;
+    repoOwner: string;
+    repoName: string;
+    sprintName: string;
+    periodStart: string;
+    periodEnd: string;
+    generateReport?: boolean;
+  }) => d)
+  .handler(async ({ data }) => {
+    const { randomUUID } = await import("node:crypto");
+    const { initSchema, getConnection, saveSprintAnalysis, getLatestSprint, createReport } = await import("./retroai-db");
+    const { analyzeSprint, toSprintMetrics, computeChanges } = await import("./metrics-engine");
+    const { generateRetroReport } = await import("./llm-service");
+    await initSchema();
+
+    // Get GitHub access token from connection
+    const conn = await getConnection(data.userId, "github");
+    const accessToken = conn?.access_token ?? undefined;
+
+    // Run the analysis
+    const result = await analyzeSprint({
+      owner: data.repoOwner,
+      repo: data.repoName,
+      sprintName: data.sprintName,
+      periodStart: data.periodStart,
+      periodEnd: data.periodEnd,
+      accessToken,
+    });
+
+    // Try to compare with previous sprint
+    const prevSprint = await getLatestSprint(data.teamId);
+    if (prevSprint) {
+      const previousMetrics = {
+        cycleTime: prevSprint.cycle_time,
+        cycleTimeChange: prevSprint.cycle_time_change,
+        prThroughput: prevSprint.pr_throughput,
+        prThroughputChange: prevSprint.pr_throughput_change,
+        bugChurnPercent: prevSprint.bug_churn_pct,
+        bugChurnChange: prevSprint.bug_churn_change,
+        reworkRatePercent: prevSprint.rework_rate_pct,
+        reworkRateChange: prevSprint.rework_rate_change,
+        avgPrSize: prevSprint.avg_pr_size,
+        avgReviewTime: prevSprint.avg_review_time,
+        totalCommits: prevSprint.total_commits,
+        contributors: prevSprint.contributors,
+        topContributors: JSON.parse(prevSprint.top_contributors || "[]"),
+        prsByDay: JSON.parse(prevSprint.prs_by_day || "[]"),
+      };
+      result.metrics = computeChanges(result.metrics, previousMetrics);
+    }
+
+    // Save the analysis
+    const sprintId = randomUUID();
+    await saveSprintAnalysis(
+      sprintId, data.teamId, data.repoOwner, data.repoName,
+      data.sprintName, data.periodStart, data.periodEnd,
+      result.metrics, null
+    );
+
+    // Generate retro report if requested
+    let report = null;
+    if (data.generateReport) {
+      const teamName = `${data.repoOwner}/${data.repoName}`;
+      const sprintMetrics = toSprintMetrics(result, teamName);
+      const retroReport = await generateRetroReport(sprintMetrics);
+
+      const reportId = randomUUID();
+      await createReport(
+        reportId, data.teamId, data.userId,
+        retroReport.title, data.periodStart, data.periodEnd,
+        retroReport.summary, JSON.stringify(retroReport.insights),
+        JSON.stringify(retroReport.actionItems),
+        JSON.stringify(retroReport.metrics), retroReport.status
+      );
+
+      report = {
+        id: reportId,
+        title: retroReport.title,
+        status: retroReport.status,
+        summary: retroReport.summary,
+        insights: retroReport.insights,
+        actionItems: retroReport.actionItems,
+        metrics: retroReport.metrics,
+      };
+    }
+
+    return {
+      sprintId,
+      report,
+      metrics: result.metrics,
+      rawPRs: result.rawPRs,
+      rawCommits: result.rawCommits,
+      comparedToPrevious: !!prevSprint,
+    };
+  });
+
+/** Get sprint history for a team. */
+export const getSprintHistory = createServerFn({ method: "POST" })
+  .validator((d: { teamId: string }) => d)
+  .handler(async ({ data }) => {
+    const { initSchema, getSprintHistory } = await import("./retroai-db");
+    await initSchema();
+    return await getSprintHistory(data.teamId);
+  });
