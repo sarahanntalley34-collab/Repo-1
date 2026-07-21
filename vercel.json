@@ -1,0 +1,5 @@
+{
+  "rewrites": [
+    { "source": "/(.*)", "destination": "https://retroai.ctonew.app/$1" }
+  ]
+}
