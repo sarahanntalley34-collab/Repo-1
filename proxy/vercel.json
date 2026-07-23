@@ -1,5 +1,1 @@
-{
-  "rewrites": [
-    { "source": "/(.*)", "destination": "https://retroai.ctonew.app/$1" }
-  ]
-}
+{"redirects":[{"source":"/(.*)","destination":"https://retroai.ctonew.app/$1","permanent":true}]}
